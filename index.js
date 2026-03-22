@@ -1,5 +1,5 @@
 const express = require('express');
-const puppeteer = require('puppeteer');
+const { createCanvas } = require('canvas');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -11,81 +11,51 @@ app.use((req, res, next) => {
     next();
 });
 
+function projectVoxel(x, y, z, angleY, width, height, length, scale, offsetX, offsetY) {
+    const cosA = Math.cos(angleY);
+    const sinA = Math.sin(angleY);
+    const rx = (x - width / 2) * cosA - (z - length / 2) * sinA;
+    const rz = (x - width / 2) * sinA + (z - length / 2) * cosA;
+    const screenX = offsetX + rx * scale;
+    const screenY = offsetY - (y - height / 2) * scale - rz * scale * 0.5;
+    return { screenX, screenY, depth: rz + y * 0.01 };
+}
+
 app.post('/render', async (req, res) => {
     const { voxels, width, height, length } = req.body;
+    const W = 600, H = 400;
+    const screenshots = [];
+    const angles = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
+    const maxDim = Math.max(width, height, length);
+    const scale = Math.min(W, H) / (maxDim * 2.2);
 
-    let browser;
-    try {
-        browser = await puppeteer.launch({
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--enable-webgl', '--use-gl=swiftshader']
-        });
+    for (const angle of angles) {
+        const canvas = createCanvas(W, H);
+        const ctx = canvas.getContext('2d');
 
-        const page = await browser.newPage();
-        await page.setViewport({ width: 600, height: 400 });
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, W, H);
 
-        const html = `
-<!DOCTYPE html>
-<html>
-<head><style>body { margin: 0; background: #1a1a2e; }</style></head>
-<body>
-<canvas id="c" width="600" height="400"></canvas>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
-const voxels = ${JSON.stringify(voxels)};
-const width = ${width};
-const height = ${height};
-const length = ${length};
+        const projected = voxels.map(v => ({
+            ...v,
+            ...projectVoxel(v.x, v.y, v.z, angle, width, height, length, scale, W / 2, H * 0.65)
+        }));
 
-const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true, preserveDrawingBuffer: true });
-renderer.setSize(600, 400);
-renderer.setClearColor(0x1a1a2e);
+        projected.sort((a, b) => a.depth - b.depth);
 
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(45, 600/400, 0.1, 2000);
-const maxDim = Math.max(width, height, length);
-const dist = maxDim * 1.2;
+        for (const v of projected) {
+            const s = scale * 0.98;
+            ctx.fillStyle = v.color;
+            ctx.fillRect(v.screenX - s / 2, v.screenY - s / 2, s, s);
+            ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+            ctx.lineWidth = 0.5;
+            ctx.strokeRect(v.screenX - s / 2, v.screenY - s / 2, s, s);
+        }
 
-scene.add(new THREE.AmbientLight(0x8899aa, 0.6));
-const sun = new THREE.DirectionalLight(0xfff5e0, 1.2);
-sun.position.set(20, 40, 20);
-scene.add(sun);
-
-const geo = new THREE.BoxGeometry(0.94, 0.94, 0.94);
-const materialCache = {};
-voxels.forEach(({ x, y, z, color }) => {
-    if (!materialCache[color]) materialCache[color] = new THREE.MeshLambertMaterial({ color });
-    const mesh = new THREE.Mesh(geo, materialCache[color]);
-    mesh.position.set(x, y, z);
-    scene.add(mesh);
-});
-
-window.screenshots = [];
-const angles = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
-angles.forEach(angle => {
-    const cx = width / 2 + Math.sin(angle) * dist;
-    const cz = length / 2 + Math.cos(angle) * dist;
-    camera.position.set(cx, dist * 0.8, cz);
-    camera.lookAt(width / 2, height / 2, length / 2);
-    renderer.render(scene, camera);
-    window.screenshots.push(document.getElementById('c').toDataURL('image/jpeg', 0.85));
-});
-window.renderDone = true;
-</script>
-</body>
-</html>`;
-
-        await page.setContent(html);
-        await page.waitForFunction('window.renderDone === true', { timeout: 30000 });
-        const screenshots = await page.evaluate(() => window.screenshots);
-
-        res.json({ screenshots });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.message });
-    } finally {
-        if (browser) await browser.close();
+        screenshots.push(canvas.toDataURL('image/jpeg', 0.85));
     }
+
+    res.json({ screenshots });
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));

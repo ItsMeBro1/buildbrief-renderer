@@ -34,7 +34,13 @@ function parseColor(color) {
 
 async function renderImage(voxels, width, height, length, angle) {
     const W = 600, H = 400;
-    const image = new Jimp(W, H, 0x1a1a2eff);
+
+    const image = await new Promise((resolve, reject) => {
+        new Jimp(W, H, 0x1a1a2eff, (err, img) => {
+            if (err) reject(err);
+            else resolve(img);
+        });
+    });
 
     const maxDim = Math.max(width, height, length);
     const scale = Math.min(W, H) / (maxDim * 2.2);

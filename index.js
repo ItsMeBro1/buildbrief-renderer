@@ -43,34 +43,43 @@ async function renderImage(voxels, width, height, length, angle) {
     });
 
     const maxDim = Math.max(width, height, length);
-    const scale = Math.min(W, H) / (maxDim * 2.2);
+    const scale = Math.min(W, H) / (maxDim * 1.8);
     const cosA = Math.cos(angle), sinA = Math.sin(angle);
 
     const projected = voxels.map(v => {
         const rx = (v.x - width/2) * cosA - (v.z - length/2) * sinA;
+        const ry = v.y - height/2;
         const rz = (v.x - width/2) * sinA + (v.z - length/2) * cosA;
-        const sx = Math.round(W/2 + rx * scale);
-        const sy = Math.round(H * 0.65 - (v.y - height/2) * scale - rz * scale * 0.5);
-        return { ...v, sx, sy, depth: rz + v.y * 0.01 };
+        const perspective = 1 + rz / (maxDim * 4);
+        const sx = Math.round(W/2 + rx * scale * perspective);
+        const sy = Math.round(H * 0.6 - ry * scale * perspective - rz * scale * 0.4 * perspective);
+        return { ...v, sx, sy, depth: rz - ry * 0.1, size: scale * perspective };
     });
     projected.sort((a, b) => a.depth - b.depth);
 
-    const s = Math.max(1, Math.round(scale * 0.98));
     for (const v of projected) {
         const rgb = parseColor(v.color);
-        const light = Math.max(0.6, 1 - v.depth / (maxDim * 3));
-        const r = Math.min(255, Math.round(rgb[0] * light));
-        const g = Math.min(255, Math.round(rgb[1] * light));
-        const b = Math.min(255, Math.round(rgb[2] * light));
-        const color = Jimp.rgbaToInt(r, g, b, 255);
+        const s = Math.max(1, Math.round(v.size * 0.95));
+
+        // Top face (lighter)
+        const topLight = 1.0;
+        const frontLight = 0.75;
+        const sideLight = 0.55;
 
         for (let dy = Math.floor(-s/2); dy < Math.ceil(s/2); dy++) {
             for (let dx = Math.floor(-s/2); dx < Math.ceil(s/2); dx++) {
                 const px = v.sx + dx;
                 const py = v.sy + dy;
-                if (px >= 0 && px < W && py >= 0 && py < H) {
-                    image.setPixelColor(color, px, py);
-                }
+                if (px < 0 || px >= W || py < 0 || py >= H) continue;
+
+                const isTop = dy < -s * 0.2;
+                const isSide = dx > s * 0.3;
+                const lightFactor = isTop ? topLight : isSide ? sideLight : frontLight;
+
+                const r = Math.min(255, Math.round(rgb[0] * lightFactor));
+                const g = Math.min(255, Math.round(rgb[1] * lightFactor));
+                const b = Math.min(255, Math.round(rgb[2] * lightFactor));
+                image.setPixelColor(Jimp.rgbaToInt(r, g, b, 255), px, py);
             }
         }
     }

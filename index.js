@@ -1,4 +1,6 @@
 const express = require('express');
+const Jimp = require('jimp');
+
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use((req, res, next) => {
@@ -23,17 +25,16 @@ function hslToRgb(h, s, l) {
 }
 
 function parseColor(color) {
+    if (!color) return [128, 128, 128];
     if (color.startsWith('#')) return hexToRgb(color);
     const m = color.match(/hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/);
     if (m) return hslToRgb(+m[1], +m[2], +m[3]);
     return [128, 128, 128];
 }
 
-function renderToPPM(voxels, width, height, length, angle) {
+async function renderImage(voxels, width, height, length, angle) {
     const W = 600, H = 400;
-    const pixels = new Uint8Array(W * H * 3).fill(26);
-    pixels.fill(26, 0, W * H * 3);
-    for (let i = 0; i < W * H * 3; i += 3) { pixels[i] = 26; pixels[i+1] = 26; pixels[i+2] = 46; }
+    const image = new Jimp(W, H, 0x1a1a2eff);
 
     const maxDim = Math.max(width, height, length);
     const scale = Math.min(W, H) / (maxDim * 2.2);
@@ -55,30 +56,35 @@ function renderToPPM(voxels, width, height, length, angle) {
         const r = Math.min(255, Math.round(rgb[0] * light));
         const g = Math.min(255, Math.round(rgb[1] * light));
         const b = Math.min(255, Math.round(rgb[2] * light));
-        for (let dy = -s/2; dy < s/2; dy++) {
-            for (let dx = -s/2; dx < s/2; dx++) {
-                const px = v.sx + Math.round(dx);
-                const py = v.sy + Math.round(dy);
+        const color = Jimp.rgbaToInt(r, g, b, 255);
+
+        for (let dy = Math.floor(-s/2); dy < Math.ceil(s/2); dy++) {
+            for (let dx = Math.floor(-s/2); dx < Math.ceil(s/2); dx++) {
+                const px = v.sx + dx;
+                const py = v.sy + dy;
                 if (px >= 0 && px < W && py >= 0 && py < H) {
-                    const idx = (py * W + px) * 3;
-                    pixels[idx] = r; pixels[idx+1] = g; pixels[idx+2] = b;
+                    image.setPixelColor(color, px, py);
                 }
             }
         }
     }
 
-    // Convert to base64 PNG via PPM
-    let ppm = `P6\n${W} ${H}\n255\n`;
-    const header = Buffer.from(ppm, 'ascii');
-    const data = Buffer.concat([header, Buffer.from(pixels)]);
-    return `data:image/png;base64,${data.toString('base64')}`;
+    const buffer = await image.getBufferAsync(Jimp.MIME_JPEG);
+    return `data:image/jpeg;base64,${buffer.toString('base64')}`;
 }
 
 app.post('/render', async (req, res) => {
-    const { voxels, width, height, length } = req.body;
-    const angles = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
-    const screenshots = angles.map(angle => renderToPPM(voxels, width, height, length, angle));
-    res.json({ screenshots });
+    try {
+        const { voxels, width, height, length } = req.body;
+        const angles = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
+        const screenshots = await Promise.all(
+            angles.map(angle => renderImage(voxels, width, height, length, angle))
+        );
+        res.json({ screenshots });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));

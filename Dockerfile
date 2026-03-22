@@ -15,11 +15,3 @@ RUN npm install --build-from-source
 COPY . .
 EXPOSE 3001
 CMD ["node", "index.js"]
-```
-
-Salva, poi:
-```
-cd C:\Users\dampa\OneDrive\Desktop\buildbrief-renderer
-git add .
-git commit -m "add dockerfile for canvas"
-git push
